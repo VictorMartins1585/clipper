@@ -353,6 +353,28 @@ def signal_heatmap(info, n):
     return v
 
 
+def load_audio(path, start=None, dur=None, sr=16000):
+    """Decodifica áudio com o ffmpeg -> float32 mono 16 kHz (o formato que o Whisper espera).
+
+    Passar o array direto para o faster-whisper evita o PyAV (av.open), que muda de API entre
+    versões — o av 19 removeu o parâmetro `metadata_errors` que o faster-whisper usa.
+    """
+    cmd = ["ffmpeg", "-v", "error", "-nostdin"]
+    if start is not None:
+        cmd += ["-ss", str(start)]
+    if dur is not None:
+        cmd += ["-t", str(dur)]
+    cmd += ["-i", str(path), "-vn", "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"]
+    proc = popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    data, err = proc.communicate()
+    _release(proc)
+    check_cancel()
+    if proc.returncode:
+        raise RuntimeError(f"ffmpeg não conseguiu ler o áudio de {Path(path).name}: "
+                           f"{err.decode(errors='ignore').strip()[-200:]}")
+    return np.frombuffer(data, np.float32).copy()
+
+
 _whisper = {}
 
 
@@ -370,20 +392,24 @@ def signal_keywords(video, n, s, log=print):
     words = [k.strip().lower() for k in s.keywords if k.strip()]
     if not words:
         return None
-    segments, _ = whisper_model(s.whisper_model, log).transcribe(
-        str(video), language=s.language or None, condition_on_previous_text=False, vad_filter=True)
+    model = whisper_model(s.whisper_model, log)
     pats = [re.compile(r"\b" + re.escape(k) + r"\b") for k in words]
     v = np.zeros(n, np.float32)
-    next_log = 600
-    for seg in segments:                     # gerador: a transcrição acontece aqui
+    block = 600                              # blocos de 10 min: não carrega a live inteira na RAM
+    for off in range(0, n, block):
         check_cancel()
-        hits = sum(len(p.findall(seg.text.lower())) for p in pats)
-        if hits:
-            a = int(seg.start)
-            v[a: max(a + 1, int(seg.end))] += hits
-        if seg.end > next_log:
-            log(f"transcrevendo... {fmt_time(seg.end)} de {fmt_time(n)}")
-            next_log += 600
+        log(f"transcrevendo... {fmt_time(off)} de {fmt_time(n)}")
+        audio = load_audio(video, off, block)
+        if not len(audio):
+            break
+        segments, _ = model.transcribe(audio, language=s.language or None,
+                                       condition_on_previous_text=False, vad_filter=True)
+        for seg in segments:                 # gerador: a transcrição acontece aqui
+            check_cancel()
+            hits = sum(len(p.findall(seg.text.lower())) for p in pats)
+            if hits:
+                a = min(n - 1, off + int(seg.start))
+                v[a: max(a + 1, off + int(seg.end))] += hits
     return v if v.any() else None
 
 
@@ -471,9 +497,15 @@ LAYOUTS = {
 
 
 def transcribe_to_srt(audio, srt, s, log=print):
-    """Legenda dinâmica: blocos de 3 palavras com timestamps por palavra."""
+    """Legenda dinâmica: blocos de 3 palavras com timestamps por palavra.
+    `audio` pode ser um array float32 16 kHz (de load_audio) ou um caminho de arquivo."""
+    if not isinstance(audio, np.ndarray):
+        audio = load_audio(audio)
+    if not len(audio):
+        srt.write_text("", encoding="utf-8")
+        return False
     segments, _ = whisper_model(s.whisper_model, log).transcribe(
-        str(audio), word_timestamps=True, language=s.language or None, vad_filter=True)
+        audio, word_timestamps=True, language=s.language or None, vad_filter=True)
     words = []
     for seg in segments:
         check_cancel()
@@ -512,13 +544,8 @@ def make_clip(vod, start, out, s, log=print):
     vf = LAYOUTS[s.layout]
     srt = out.with_suffix(".srt")
     if s.subtitles:
-        wav = out.with_suffix(".wav")
-        run(["ffmpeg", "-v", "error", "-y", "-ss", str(start), "-t", str(s.clip_len), "-i", str(vod),
-             "-vn", "-ac", "1", "-ar", "16000", str(wav)])
-        try:
-            has_speech = transcribe_to_srt(wav, srt, s, log)
-        finally:
-            wav.unlink(missing_ok=True)
+        audio = load_audio(vod, start, s.clip_len)          # direto na memória, sem .wav temporário
+        has_speech = transcribe_to_srt(audio, srt, s, log)
         if has_speech:
             style = "Alignment=2,MarginV=60,FontSize=14,Bold=0,Outline=3,PrimaryColour=&H00FFFFFF"
             fonts = ""

@@ -462,6 +462,18 @@ def selftest():
         except Exception as e:                                   # noqa: BLE001
             problems.append(f"ffmpeg/legenda: {e!r}")
 
+    if not clipper.missing_tools():         # decodificação de áudio usada pelas legendas (ffmpeg -> numpy)
+        try:
+            tone = clipper.BASE / "selftest_tone.wav"
+            clipper.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:r=16000",
+                         "-t", "2", str(tone)])
+            a = clipper.load_audio(tone)
+            tone.unlink(missing_ok=True)
+            if not (30000 <= len(a) <= 34000):
+                problems.append(f"load_audio devolveu {len(a)} amostras (esperado ~32000)")
+        except Exception as e:                                   # noqa: BLE001
+            problems.append(f"load_audio (ffmpeg -> numpy): {e!r}")
+
     try:                                    # modelo de detecção de voz (onnxruntime + arquivo embutido)
         import numpy as np
         from faster_whisper.vad import get_speech_timestamps
@@ -474,9 +486,10 @@ def selftest():
             wav = clipper.BASE / "selftest.wav"
             clipper.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
                          "-t", "3", str(wav)])
-            segs, _ = clipper.whisper_model("tiny", print).transcribe(str(wav), vad_filter=True)
-            list(segs)
+            audio = clipper.load_audio(wav)      # decodifica pelo ffmpeg, como o programa faz de verdade
             wav.unlink(missing_ok=True)
+            segs, _ = clipper.whisper_model("tiny", print).transcribe(audio, vad_filter=True)
+            list(segs)
             notes.append("modelo tiny baixado e executado")
         except Exception as e:                                   # noqa: BLE001
             problems.append(f"faster-whisper online: {e!r}")

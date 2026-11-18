@@ -1,5 +1,6 @@
 yt-dlp[default]
 numpy
-faster-whisper==1.0.3
+faster-whisper==1.2.1    # a 1.0.3 exige av<13, que não tem versão para Python 3.14
+av>=15,<19               # av 19 removeu `metadata_errors`, que o faster-whisper ainda usa em av.open()
 google-api-python-client
 google-auth-oauthlib
