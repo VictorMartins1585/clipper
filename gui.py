@@ -497,6 +497,13 @@ def selftest():
     if not shutil.which("deno"):
         problems.append("deno não encontrado (o yt-dlp precisa dele para o YouTube)")
     notes.append(f"BASE={clipper.BASE} APP_DIR={clipper.APP_DIR} frozen={clipper.FROZEN}")
+    try:                                    # mostra o que foi empacotado de fato (ajuda a achar build antigo)
+        import av
+        import faster_whisper
+        notes.append(f"selftest v2 | faster-whisper {faster_whisper.__version__} | av {av.__version__} | "
+                     f"load_audio={'sim' if hasattr(clipper, 'load_audio') else 'NÃO (clipper.py antigo)'}")
+    except Exception as e:                                       # noqa: BLE001
+        notes.append(f"versões: {e!r}")
 
     text = ("SELFTEST OK\n" if not problems else "SELFTEST FALHOU\n") + "\n".join(problems + notes) + "\n"
     try:
