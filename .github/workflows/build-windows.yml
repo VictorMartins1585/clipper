@@ -1,0 +1,58 @@
+name: Gerar Clipper para Windows
+
+on:
+  push:
+    tags: ["v*"]          # criar uma versão (ex.: v1.0.0) gera o .exe e anexa à Release
+  workflow_dispatch:      # ou rode manualmente na aba Actions
+
+permissions:
+  contents: write         # necessário para anexar o arquivo à Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Empacotar com PyInstaller
+        run: pyinstaller Clipper.spec --noconfirm
+
+      - name: Baixar ffmpeg e deno para dentro do pacote
+        shell: pwsh
+        run: ./scripts/fetch_tools.ps1 -Dest dist\Clipper\bin
+
+      - name: Teste automático do pacote (selftest)
+        shell: pwsh
+        env:
+          CLIPPER_SELFTEST_ONLINE: "1"     # também baixa o modelo tiny e roda uma transcrição
+        run: |
+          $p = Start-Process -FilePath "dist\Clipper\Clipper.exe" -ArgumentList "--selftest" -Wait -PassThru
+          if (Test-Path "$env:USERPROFILE\Clipper\selftest.txt") { Get-Content "$env:USERPROFILE\Clipper\selftest.txt" }
+          if ($p.ExitCode -ne 0) { throw "O selftest falhou (veja o relatório acima)." }
+
+      - name: Compactar
+        shell: pwsh
+        run: Compress-Archive -Path dist\Clipper -DestinationPath Clipper-Windows.zip -CompressionLevel Optimal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Clipper-Windows
+          path: Clipper-Windows.zip
+          retention-days: 14
+
+      - name: Anexar à Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Clipper-Windows.zip
+          generate_release_notes: true

@@ -1,0 +1,17 @@
+# ambiente e build
+venv/
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+
+# dados gerados / segredos (nunca suba isto)
+vods/
+clips/
+models/
+*.db
+token.json
+client_secret.json
+settings.json
+selftest.txt
